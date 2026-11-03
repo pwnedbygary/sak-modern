@@ -874,10 +874,12 @@ class App(tk.Tk):
 
     def _apply_scaling(self):
         self.tk.call("tk", "scaling", self.base_tk_scaling * self.ui_scale)
-        desired_w = int(1240 + max(0.0, self.ui_scale - 1.0) * 720)
-        desired_h = int(820 + max(0.0, self.ui_scale - 1.0) * 440)
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
+        base_w = max(1100, min(1600, int(screen_w * 0.72)))
+        base_h = max(820, min(1000, int(screen_h * 0.72)))
+        desired_w = int(base_w + max(0.0, self.ui_scale - 1.0) * 720)
+        desired_h = int(base_h + max(0.0, self.ui_scale - 1.0) * 440)
         # Leave room for window decorations and the taskbar, and never create
         # an initial window larger than the desktop.
         width = min(desired_w, max(900, int(screen_w * 0.94)))
