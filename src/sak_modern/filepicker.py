@@ -77,6 +77,10 @@ class FilePickerDialog(tk.Toplevel):
         self.fg = u.FG
         self.muted = u.MUTED
         self.accent = u.ACCENT
+        try:
+            self.scale = max(1.0, float(self.tk.call("tk", "scaling")) / 1.333)
+        except Exception:
+            self.scale = 1.0
 
         self.title(title)
         self.configure(bg=self.bg)
@@ -142,7 +146,7 @@ class FilePickerDialog(tk.Toplevel):
         body = tk.Frame(root, bg=self.bg)
         body.pack(fill="both", expand=True)
 
-        places = tk.Frame(body, bg=self.panel, width=170)
+        places = tk.Frame(body, bg=self.panel, width=int(170 * self.scale))
         places.pack(side="left", fill="y", padx=(0, 8))
         places.pack_propagate(False)
         tk.Label(places, text="Places", bg=self.panel, fg=self.muted,

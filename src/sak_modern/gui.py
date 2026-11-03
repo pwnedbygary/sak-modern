@@ -132,6 +132,8 @@ class App(tk.Tk):
         self.configure(bg=BG)
         self.events: queue.Queue = queue.Queue()
         self.base_tk_scaling = float(self.tk.call("tk", "scaling"))
+        self.dpi_scale = max(1.0, self.base_tk_scaling / 1.333)
+        self.effective_scale = self.dpi_scale
         self.palette_name = "dark"
         self.current_page = "bundle"
         self.ui_scale = 1.0
@@ -217,7 +219,7 @@ class App(tk.Tk):
             child.destroy()
         self.log_window = None
         self.pkg_ghost = None
-        sidebar = tk.Frame(self, bg=BG, width=int(210 * max(self.ui_scale, 1.0)))
+        sidebar = tk.Frame(self, bg=BG, width=int(210 * max(self.effective_scale, 1.0)))
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
@@ -283,8 +285,13 @@ class App(tk.Tk):
         ttk.Label(inner, text="Select one or more update/DLC NSPs. Higher versions win; matching DLC is replaced.",
                   style="Muted.TLabel").pack(anchor="w", pady=(2, 8))
         cols = ("kind", "title", "version", "size", "file")
+        ui_s = max(self.effective_scale, 1.0)
         self.addon_tree = make_scrollable_tree(
-            inner, cols, {"kind": 75, "title": 190, "version": 90, "size": 100, "file": 520}, height=4)
+            inner, cols,
+            {k: int(v * ui_s) for k, v in
+             {"kind": 75, "title": 190, "version": 90, "size": 100, "file": 520}.items()},
+            height=4)
+        self.after_idle(self._autosize_addons)
 
         out_card = Card(page)
         out_card.pack(fill="x")
@@ -376,8 +383,13 @@ class App(tk.Tk):
         ttk.Button(head, text="Clear", style="Ghost.TButton", command=self._pkg_clear).pack(side="right", padx=(0, 6))
         ttk.Button(head, text="Remove", style="Ghost.TButton", command=self._pkg_remove).pack(side="right", padx=(0, 6))
         cols = ("package", "title", "size", "format")
+        ui_s = max(self.effective_scale, 1.0)
         self.pkg_tree = make_scrollable_tree(
-            left_inner, cols, {"package": 130, "title": 230, "size": 100, "format": 85}, height=5)
+            left_inner, cols,
+            {k: int(v * ui_s) for k, v in
+             {"package": 130, "title": 230, "size": 100, "format": 85}.items()},
+            height=5)
+        self.after_idle(self._autosize_pkg)
         self.pkg_tree.bind("<Double-1>", lambda _e: self._pkg_remove())
         self.drop_canvas = tk.Canvas(left_inner, bg=PANEL_2, highlightthickness=0, height=58, bd=0)
         self.drop_canvas.pack(fill="x")
@@ -445,10 +457,13 @@ class App(tk.Tk):
         table_inner = tk.Frame(table_card, bg=PANEL)
         table_inner.pack(fill="both", expand=True, padx=14, pady=10)
         cols = ("package", "nca", "title", "type", "size", "keygen")
+        ui_s = max(self.effective_scale, 1.0)
         self.inspect_tree = make_scrollable_tree(
             table_inner, cols,
-            {"package": 110, "nca": 340, "title": 170, "type": 100, "size": 100, "keygen": 75},
+            {k: int(v * ui_s) for k, v in
+             {"package": 110, "nca": 340, "title": 170, "type": 100, "size": 100, "keygen": 75}.items()},
             height=10)
+        self.after_idle(self._autosize_inspect)
         self.inspect_text = tk.Text(table_inner, height=4, bg=PANEL, fg=MUTED, insertbackground=FG,
                                     relief="flat", font=(MONO, 8), wrap="word")
         self.inspect_text.pack(fill="x", pady=(6, 0))
@@ -654,10 +669,7 @@ class App(tk.Tk):
                 fmt = "XCI" if self.pkg_source and self.pkg_source.suffix.lower() == ".xci" else "NSP"
             self.pkg_tree.insert("", "end", values=(package_label(g), f"{g.title_id:016X}",
                                                     human_size(g.total_size), fmt))
-        self.after_idle(lambda: autosize_tree(
-            self.pkg_tree,
-            {"package": 150, "title": 260, "size": 120, "format": 90},
-            min_width=70))
+        self.after_idle(self._autosize_pkg)
 
     def _rom_dir(self) -> Path:
         candidates = [
@@ -876,10 +888,12 @@ class App(tk.Tk):
         self.tk.call("tk", "scaling", self.base_tk_scaling * self.ui_scale)
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
+        self.dpi_scale = max(1.0, self.base_tk_scaling / 1.333)
+        self.effective_scale = self.ui_scale * self.dpi_scale
         base_w = max(1100, min(1600, int(screen_w * 0.72)))
         base_h = max(820, min(1000, int(screen_h * 0.72)))
-        desired_w = int(base_w + max(0.0, self.ui_scale - 1.0) * 720)
-        desired_h = int(base_h + max(0.0, self.ui_scale - 1.0) * 440)
+        desired_w = int((base_w + max(0.0, self.ui_scale - 1.0) * 720) * self.dpi_scale)
+        desired_h = int((base_h + max(0.0, self.ui_scale - 1.0) * 440) * self.dpi_scale)
         # Leave room for window decorations and the taskbar, and never create
         # an initial window larger than the desktop.
         width = min(desired_w, max(900, int(screen_w * 0.94)))
@@ -1070,6 +1084,34 @@ class App(tk.Tk):
         self.add_paths = []
         self._refresh_addons()
 
+    def _autosize_addons(self):
+        if not hasattr(self, "addon_tree") or not self.addon_tree.winfo_exists():
+            return
+        s = max(self.effective_scale, 1.0)
+        autosize_tree(self.addon_tree,
+                      {k: int(v * s) for k, v in
+                       {"kind": 110, "title": 300, "version": 110, "size": 120, "file": 900}.items()},
+                      min_width=int(60 * s))
+
+    def _autosize_inspect(self):
+        if not hasattr(self, "inspect_tree") or not self.inspect_tree.winfo_exists():
+            return
+        s = max(self.effective_scale, 1.0)
+        autosize_tree(self.inspect_tree,
+                      {k: int(v * s) for k, v in
+                       {"package": 140, "nca": 600, "title": 260, "type": 150,
+                        "size": 120, "keygen": 100}.items()},
+                      min_width=int(55 * s))
+
+    def _autosize_pkg(self):
+        if not hasattr(self, "pkg_tree") or not self.pkg_tree.winfo_exists():
+            return
+        s = max(self.effective_scale, 1.0)
+        autosize_tree(self.pkg_tree,
+                      {k: int(v * s) for k, v in
+                       {"package": 150, "title": 260, "size": 120, "format": 90}.items()},
+                      min_width=int(60 * s))
+
     def _refresh_addons(self):
         for item in self.addon_tree.get_children():
             self.addon_tree.delete(item)
@@ -1085,10 +1127,7 @@ class App(tk.Tk):
                                                           human_size(g.total_size), source))
         except Exception as exc:
             self.log_line(f"Could not read add-on: {exc}")
-        self.after_idle(lambda: autosize_tree(
-            self.addon_tree,
-            {"kind": 110, "title": 300, "version": 110, "size": 120, "file": 900},
-            min_width=60))
+        self.after_idle(self._autosize_addons)
 
     def choose_out(self):
         p = self._pick_file(
@@ -1185,10 +1224,7 @@ class App(tk.Tk):
         lines = [f"{c.path.name}"] + [f"! {w}" for w in c.warnings]
         self.inspect_text.delete("1.0", "end")
         self.inspect_text.insert("end", "\n".join(lines) + "\n")
-        self.after_idle(lambda: autosize_tree(
-            self.inspect_tree,
-            {"package": 140, "nca": 600, "title": 260, "type": 150, "size": 120, "keygen": 100},
-            min_width=60))
+        self.after_idle(self._autosize_inspect)
 
     def run_verify(self):
         path = self.inspect_var.get().strip()
@@ -1210,10 +1246,7 @@ class App(tk.Tk):
         lines.append("OK" if rep.ok else "FAILED")
         self.inspect_text.delete("1.0", "end")
         self.inspect_text.insert("end", "\n".join(lines) + "\n")
-        self.after_idle(lambda: autosize_tree(
-            self.inspect_tree,
-            {"package": 140, "nca": 600, "title": 260, "type": 150, "size": 120, "keygen": 100},
-            min_width=60))
+        self.after_idle(self._autosize_inspect)
 
     def start_build(self):
         if not self.require_keys():
