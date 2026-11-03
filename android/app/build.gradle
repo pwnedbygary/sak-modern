@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'com.sakmodern.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.sakmodern.app"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0.0"
+        ndk {
+            abiFilters "arm64-v8a", "x86_64"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.12"
+        buildPython System.getenv("BUILD_PYTHON") ?: "/tmp/py312/python/bin/python3"
+        pip {
+            install("cryptography==42.0.8")
+        }
+    }
+    sourceSets {
+        main {
+            srcDir("../../sak-modern/src")
+            srcDir("src/main/python")
+        }
+    }
+}

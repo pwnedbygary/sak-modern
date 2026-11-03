@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SAK Modern
+Comment=Bundle, inspect, and convert Switch NSP/XCI files
+Exec=sak-modern
+Icon=sak-modern
+Terminal=false
+Categories=Utility;FileTools;
+Keywords=switch;nsp;xci;bundle;dlc;update;
