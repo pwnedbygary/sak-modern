@@ -58,6 +58,16 @@ the update and all four DLCs from the separate NSP files in the configured game
 directory. It did not use the update/DLC NCAs embedded in the XCI. This is
 normal emulator behavior and is why the app recommends NSP output for emulators.
 
+## File picker and columns
+
+- Replaced the native Tk file dialog with the custom Dolphin-style picker.
+- Verified places navigation, path entry, filtering, hidden-file toggle, selection
+  details, and auto-sized Name/Size/Modified/Type/Permissions columns.
+- Add-on and Inspect tables auto-size after population; wide tables have
+  horizontal and vertical scrollbars rather than silently clipping text.
+- The app window was checked at 100% on 1920x1080 and 150% on 1920x1080; it is
+  capped and centered to the desktop rather than opening at a fixed size.
+
 ## Desktop appearance
 
 - Text size 100/115/130/150% and Dark/Light/High-contrast themes were exercised
