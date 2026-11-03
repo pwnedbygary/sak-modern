@@ -19,4 +19,4 @@ SAK Modern uses its own dark, Dolphin-style picker instead of the small Tk
 The dialog sizes itself from the desktop resolution and only opens at readable
 sizes.
 
-![File picker](file-picker.png)
+![File picker](../resources/file-picker.png)
