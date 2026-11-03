@@ -884,6 +884,7 @@ class App(tk.Tk):
         height = min(desired_h, max(620, int(screen_h * 0.90)))
         x = max(0, (screen_w - width) // 2)
         y = max(0, (screen_h - height) // 2)
+        self.minsize(min(1080, width), min(720, height))
         self.geometry(f"{width}x{height}+{x}+{y}")
 
     def _capture_ui_state(self) -> dict:
