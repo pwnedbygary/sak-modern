@@ -31,6 +31,11 @@ an already-merged file without duplicating the old content.
 - Correct **8/16/32 GiB gamecard sizing**, including the 16 GiB boundary that
   the Bayonetta 3 base+update bundle lands on.
 
+## Source and releases
+
+- Source: <https://github.com/pwnedbygary/sak-modern>
+- Releases: <https://github.com/pwnedbygary/sak-modern/releases>
+
 ## Downloads / builds
 
 - Linux: `SAK-Modern-x86_64.AppImage` (self-contained; no Wine).
