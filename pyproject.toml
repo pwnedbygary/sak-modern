@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sak-modern"
 version = "1.0.0"
-description = "Switch Army Knife Modern - cross-platform NSP/XCI bundle, convert, and inspection tool"
+description = "Switch Army Knife Modern - cross-platform NSP/XCI/NUP bundle, convert, and inspection tool"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -14,6 +14,7 @@ dependencies = ["cryptography>=42"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pyinstaller>=6"]
+zstd = ["zstandard>=0.22"]
 
 [project.scripts]
 sak-modern = "sak_modern.cli:main"

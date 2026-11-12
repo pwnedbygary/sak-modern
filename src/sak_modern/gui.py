@@ -7,7 +7,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .core.bundle import build_nsp, build_xci, make_plan
@@ -15,6 +15,7 @@ from .core.errors import SakError
 from .core.extract import extract_packages, package_label
 from .core.keys import KeyStore
 from .core.model import group_contents, load_container
+from .core.nup import NupError, build_nup, collect_packages, extract_nup, is_nup, open_nup
 from .core.verify import verify_container
 from .filepicker import FilePickerDialog, autosize_tree
 
@@ -155,6 +156,8 @@ class App(tk.Tk):
         self.pkg_drag_index: int | None = None
         self.pkg_ghost: tk.Toplevel | None = None
         self._pkg_progress = tk.DoubleVar(value=0)
+        self._nup_progress = tk.DoubleVar(value=0)
+        self.nup_layout_var = tk.StringVar(value="tree")
         self._last_dir: Path | None = None
         self.scale_var = tk.StringVar(value="100%")
         self.theme_var = tk.StringVar(value="Dark")
@@ -219,6 +222,9 @@ class App(tk.Tk):
             child.destroy()
         self.log_window = None
         self.pkg_ghost = None
+        # Rail width is a global layout value that every page shares, so it
+        # stays at its original 210 and the NUP layout choices use short
+        # labels instead of widening the whole app.
         sidebar = tk.Frame(self, bg=BG, width=int(210 * max(self.effective_scale, 1.0)))
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
@@ -235,6 +241,8 @@ class App(tk.Tk):
             b.pack(fill="x", padx=8, pady=2)
             self.nav_buttons[name] = b
 
+        self._build_nup_panel(sidebar)
+
         foot = tk.Frame(sidebar, bg=BG)
         foot.pack(side="bottom", fill="x", padx=18, pady=18)
         tk.Label(foot, text=f"v{__version__}", bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w")
@@ -249,6 +257,33 @@ class App(tk.Tk):
         self.pages["inspect"] = self._build_inspect_page()
         self.pages["settings"] = self._build_settings_page()
         self.show_page("bundle")
+
+    def _build_nup_panel(self, parent):
+        box = tk.LabelFrame(parent, text=" Switch 2 / NUP ", bg=BG, fg=MUTED,
+                            font=(FONT, 9, "bold"), bd=0, labelanchor="nw",
+                            highlightbackground=BORDER, highlightthickness=1)
+        box.pack(fill="x", padx=10, pady=(16, 0))
+        inner = tk.Frame(box, bg=BG)
+        inner.pack(fill="x", padx=8, pady=(4, 8))
+        self.nup_pack_btn = ttk.Button(inner, text="Pack folder(s) → NUP…",
+                                       style="Ghost.TButton", command=self.nup_pack)
+        self.nup_pack_btn.pack(fill="x")
+        self.nup_unpack_btn = ttk.Button(inner, text="Unpack NUP → folder…",
+                                         style="Ghost.TButton", command=self.nup_unpack)
+        self.nup_unpack_btn.pack(fill="x", pady=(4, 0))
+        tk.Label(inner, text="Layout", bg=BG, fg=MUTED, font=(FONT, 9)).pack(anchor="w", pady=(8, 2))
+        self.nup_layout = ttk.Combobox(inner, textvariable=self.nup_layout_var, state="readonly",
+                                       values=("tree", "split"))
+        self.nup_layout.pack(fill="x")
+        self.nup_inspect_btn = ttk.Button(inner, text="Inspect NUP…", style="Ghost.TButton",
+                                          command=self.nup_inspect)
+        self.nup_inspect_btn.pack(fill="x", pady=(8, 0))
+        self.nup_status = tk.Label(inner, text="Ready", bg=BG, fg=MUTED, font=(FONT, 9),
+                                   wraplength=int(168 * max(self.effective_scale, 1.0)),
+                                   justify="left", anchor="w")
+        self.nup_status.pack(fill="x", pady=(8, 2))
+        self.nup_progress = ttk.Progressbar(inner, variable=self._nup_progress, maximum=100)
+        self.nup_progress.pack(fill="x")
 
     def _build_bundle_page(self):
         page = tk.Frame(self.main, bg=BG)
@@ -1141,7 +1176,7 @@ class App(tk.Tk):
     def choose_inspect(self):
         p = self._pick_file(
             "Select container",
-            filetypes=[("Switch containers (*.xci *.nsp)", "*.xci *.nsp"),
+            filetypes=[("Switch containers (*.xci *.nsp *.nup)", "*.xci *.nsp *.nup"),
                        ("All files (*.*)", "*")],
             initialdir=self._rom_dir(),
         )
@@ -1198,6 +1233,9 @@ class App(tk.Tk):
         path = self.inspect_var.get().strip()
         if not path:
             return
+        if is_nup(path):
+            self._show_nup_inspect(Path(path))
+            return
         if not self.require_keys():
             return
         try:
@@ -1246,6 +1284,136 @@ class App(tk.Tk):
         lines.append("OK" if rep.ok else "FAILED")
         self.inspect_text.delete("1.0", "end")
         self.inspect_text.insert("end", "\n".join(lines) + "\n")
+        self.after_idle(self._autosize_inspect)
+
+    # ---------- NUP (Switch 2) ----------
+    def _nup_busy(self, busy: bool):
+        state = "disabled" if busy else "normal"
+        for name in ("nup_pack_btn", "nup_unpack_btn", "nup_inspect_btn"):
+            button = getattr(self, name, None)
+            if button is not None and button.winfo_exists():
+                button.configure(state=state)
+
+    def _nup_layout(self) -> str:
+        """Selected extract layout; tolerates the older verbose labels."""
+        value = self.nup_layout_var.get()
+        if value.startswith("split"):
+            return "split"
+        return "tree"
+
+    def nup_pack(self):
+        picked = self._pick_file(
+            "Select package folder(s) to pack into a NUP", mode="directory",
+            initialdir=self._rom_dir(),
+        )
+        if not picked:
+            return
+        folders = [Path(p) for p in (picked if isinstance(picked, list) else [picked])]
+        out_dir = Path(self.out_var.get()).expanduser() if self.out_var.get().strip() else Path.home()
+        start = out_dir if out_dir.is_dir() else (self._last_dir or self._rom_dir())
+        out = filedialog.asksaveasfilename(
+            parent=self, title="Save NUP container", defaultextension=".nup",
+            initialdir=str(start), initialfile=f"{folders[0].name}.nup",
+            filetypes=[("NUP containers (*.nup)", "*.nup"), ("All files (*.*)", "*")],
+        )
+        if not out:
+            return
+        out_path = Path(out).expanduser()
+        self._nup_busy(True)
+        self._nup_progress.set(0)
+        self.nup_status.configure(text="Packing…", foreground=FG)
+        self.log_line(f"Packing {len(folders)} folder(s) into {out_path.name}")
+
+        def worker():
+            try:
+                sources = collect_packages(folders)
+                self.events.put(("nup_progress", 0.0, f"{len(sources)} package(s) collected"))
+                written = build_nup(
+                    sources, out_path,
+                    progress=lambda done, total, label: self.events.put(
+                        ("nup_progress", done * 100.0 / max(total, 1), f"{label}: {done} / {total}")),
+                )
+                self.events.put(("nup_pack_done", written))
+            except Exception as exc:  # NupError included: reported as a normal error dialog
+                self.events.put(("nup_error", "Pack NUP failed", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def nup_unpack(self):
+        source = self._pick_file(
+            "Select a NUP container to unpack",
+            filetypes=[("NUP containers (*.nup)", "*.nup"), ("All files (*.*)", "*")],
+            initialdir=self._rom_dir(),
+        )
+        if not source:
+            return
+        nup_path = Path(source[0] if isinstance(source, list) else source)
+        target = self._pick_file(
+            "Choose the unpack output folder", mode="directory",
+            initialdir=self._rom_dir(),
+        )
+        if not target:
+            return
+        out_dir = Path(target[0] if isinstance(target, list) else target)
+        layout = self._nup_layout()
+        self._nup_busy(True)
+        self._nup_progress.set(0)
+        self.nup_status.configure(text=f"Unpacking {nup_path.name}…", foreground=FG)
+        self.log_line(f"Unpacking {nup_path.name} ({layout}) into {out_dir}")
+
+        def worker():
+            try:
+                container = open_nup(nup_path)
+                files = extract_nup(
+                    container, out_dir, layout=layout,
+                    progress=lambda done, total, label: self.events.put(
+                        ("nup_progress", done * 100.0 / max(total, 1), f"{label}: {done} / {total}")),
+                )
+                self.events.put(("nup_unpack_done", files, out_dir))
+            except Exception as exc:  # NupError included: reported as a normal error dialog
+                self.events.put(("nup_error", "Unpack NUP failed", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def nup_inspect(self):
+        picked = self._pick_file(
+            "Inspect a NUP container",
+            filetypes=[("NUP containers (*.nup)", "*.nup"), ("All files (*.*)", "*")],
+            initialdir=self._rom_dir(),
+        )
+        if not picked:
+            return
+        self.inspect_var.set(str(picked[0] if isinstance(picked, list) else picked))
+        self.show_page("inspect")
+        self.run_inspect()
+
+    def _show_nup_inspect(self, path: Path):
+        try:
+            container = open_nup(path)
+            summaries = container.summaries()
+        except (NupError, OSError) as exc:
+            self.inspect_text.delete("1.0", "end")
+            self.inspect_text.insert("end", f"Error: {exc}\n")
+            return
+        for item in self.inspect_tree.get_children():
+            self.inspect_tree.delete(item)
+        total = human_size(container.file_size)
+        lines = [f"NUP  {path.name}", f"{len(summaries)} package(s) · {total}"]
+        lines.extend(f"! {warning}" for warning in container.warnings)
+        for summary in summaries:
+            flags = " · standalone update" if summary.standalone_update else ""
+            lines.append("")
+            lines.append(f"[{summary.index}] {summary.kind_name} {summary.title_id:016X} "
+                         f"v{summary.display_version} · {summary.file_count} files · "
+                         f"{human_size(summary.total_size)}{flags}")
+            lines.append(f"    {summary.title_name or '-'}")
+            if summary.meta_types:
+                lines.append("    meta: " + ", ".join(f"0x{tlv:04x}" for tlv in summary.meta_types))
+        self.inspect_text.delete("1.0", "end")
+        self.inspect_text.insert("end", "\n".join(lines) + "\n")
+        self.inspect_summary.configure(text=f"NUP · {len(summaries)} package(s) · {total}",
+                                       foreground=GREEN)
+        self.log_line(f"Inspected NUP {path.name}: {len(summaries)} package(s)")
         self.after_idle(self._autosize_inspect)
 
     def start_build(self):
@@ -1331,6 +1499,25 @@ class App(tk.Tk):
                     self.pkg_status.configure(text="Extraction failed", foreground=RED)
                     self.log_line(f"Extraction error: {event[1]}")
                     messagebox.showerror("Extraction failed", event[1])
+                elif event[0] == "nup_progress":
+                    self._nup_progress.set(event[1])
+                    self.nup_status.configure(text=event[2], foreground=FG)
+                elif event[0] == "nup_pack_done":
+                    self._nup_busy(False)
+                    self._nup_progress.set(100)
+                    self.nup_status.configure(text=f"Packed {event[1].name}", foreground=GREEN)
+                    self.log_line(f"Wrote {event[1]}")
+                elif event[0] == "nup_unpack_done":
+                    self._nup_busy(False)
+                    self._nup_progress.set(100)
+                    self.nup_status.configure(text=f"Unpacked {len(event[1])} file(s)",
+                                              foreground=GREEN)
+                    self.log_line(f"Unpacked {len(event[1])} file(s) into {event[2]}")
+                elif event[0] == "nup_error":
+                    self._nup_busy(False)
+                    self.nup_status.configure(text="NUP operation failed", foreground=RED)
+                    self.log_line(f"{event[1]}: {event[2]}")
+                    messagebox.showerror(event[1], event[2])
         except queue.Empty:
             pass
         self.after(100, self._poll_events)

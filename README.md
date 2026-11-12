@@ -27,6 +27,12 @@ an already-merged file without duplicating the old content.
   filters, and auto-sized columns.
 - **Convert** implicitly: choose an XCI base + `NSP` output, or an NSP base +
   `XCI` output.
+- **Switch 2 / NUP**: pack an `exefs/` + `romfs/` folder, a whole
+  `base/ + updates/ + dlc/` tree, or several sibling folders into a single
+  plaintext `.nup`, and unpack a `.nup` back to folders. No keys needed.
+- **Re-bundle a NUP**: pass an existing `.nup` plus a newer update or DLC folder
+  and the superseded package is replaced, not appended. Files shared between the
+  base and its update are stored once.
 - Handles both 512-byte-aligned and non-aligned source PFS0 files.
 - Correct **8/16/32 GiB gamecard sizing**, including the 16 GiB boundary that
   the Bayonetta 3 base+update bundle lands on.
@@ -71,7 +77,8 @@ Put `prod.keys` (or `keys.txt`) next to the executable, in `~/.switch`, or selec
 it in **Settings**. Keys are read locally and never uploaded. The app needs the
 `header_key`, the relevant `titlekek_XX`, and master-key material only when it
 must rewrite a title-key NCA for XCI output. Bundling already-ticketless content
-does not need those keys.
+does not need those keys. NUP packing and unpacking needs no keys at all:
+NUP content is plaintext, so there is nothing to decrypt.
 
 No keys or game content are included in this repository or the binaries.
 
@@ -99,6 +106,31 @@ sak-modern extract "Game (1G+1U+4D).xci" -o ~/SAK-Output --keys ~/.switch/prod.k
 sak-modern verify ~/SAK-Output/Game.xci --keys ~/.switch/prod.keys
 ```
 
+Switch 2 / NUP commands (no keys involved):
+
+```bash
+# Pack one decrypted game folder into a NUP
+sak-modern nup pack "Donkey Kong Bananza Switch 2 NSP BASE GAME" \
+  -o ~/SAK-Output/Game.nup
+
+# Pack base + update + DLC (sibling folders) into ONE container
+sak-modern nup pack \
+  ".../Donkey Kong Bananza Switch 2 NSP BASE GAME" \
+  ".../Donkey Kong Bananza Switch 2 NSP Update 2.1.11" \
+  ".../Donkey Kong Bananza Switch 2 NSP DLC" \
+  -o ~/SAK-Output/Game (1G+1U+1D).nup
+
+# Re-bundle: replace the update inside an existing NUP
+sak-modern nup merge "Game.nup" ".../NSP Update 2.2.0" -o "Game v2.nup"
+
+# Unpack a NUP back to exefs/romfs (+ updates/ and dlc/)
+sak-modern nup unpack "Game.nup" -o ~/SAK-Output/Game
+
+# Inspect packages and verify every stored hash
+sak-modern nup inspect "Game.nup"
+sak-modern nup verify "Game.nup"
+```
+
 ## XCI vs NSP (important for DLC)
 
 - **NSP** keeps the original tickets and rights IDs. This is the right output for
@@ -116,6 +148,50 @@ Ryujinx test loaded the merged XCI as the base game, then loaded the update and
 all four Dusk Diver DLCs from the separate NSPs in the library — not from the
 XCI. If your goal is a single file for an emulator, use the **NSP** output; if
 your goal is one file for USB/gamecard-style loading, use **XCI**.
+
+## Switch 2 and NUP
+
+Switch 2 games are not shipped as NSP or XCI. A decrypted Switch 2 game is a
+plain `exefs/` + `romfs/` folder, and the single-file form is **NUP** (NX
+Package Format) - a published clean-room container for unencrypted NX dumps
+([a55uka/nup `SPEC.md`](https://github.com/a55uka/nup)). It stores ExeFS program
+files and full RomFS trees directly, so one file can hold the base game, its
+updates and its add-ons, and it needs no keys.
+
+SAK Modern reads and writes NUP v1, including both codecs it defines
+(`raw` and `zstd`):
+
+- **Folder to NUP.** A folder holding `exefs/` and/or `romfs/` is one package.
+  A folder that also carries `updates/<version>/` and `dlc/<title-id>/<index>/`
+  contributes several packages in one pass, and several sibling folders can be
+  packed together into one container.
+- **NUP to folder.** Writes the canonical, re-packable tree - `exefs/`, `romfs/`,
+  `updates/<decimal-version>/`, `dlc/<title-id>/<index>/` - or one folder per
+  package with `--layout split`.
+- **Merge and re-bundle.** An existing `.nup` can be an input. Fed an existing
+  container plus a newer update folder, the older update package is replaced
+  rather than appended, matching the XCI/NSP re-bundle path. Byte-identical files
+  are stored once across all packages.
+- **Metadata.** Each package carries its NPDM, icon, title name, publisher,
+  build ID and display version. Unpacking writes them to a `meta/` folder, so
+  folder to NUP to folder to NUP round trips are byte-identical.
+
+The title ID is read from the NPDM program ID inside `exefs/main.npdm`, and the
+version is inferred from the folder name (`458752` or `2.1.11`). Override either
+with `--title-id` and `--version`, and classify a folder with `--kind`.
+`.listing` files left behind by dumping tools are dropped automatically. Several
+add-on packages may share one title ID and differ by content index
+(`dlc/<title-id>/0`, `/1`, ...); they are kept as separate packages.
+
+Two honest limits: a NUP stores files, so a directory that contains no files is
+not represented; and `--compression zstd` keeps each compressed payload in memory
+until the container is written, so very large dumps pack far cheaper with the
+default `raw` codec.
+
+NUP is plaintext, so it is not installable on a retail console and carries no
+tickets or rights IDs; it is what emulators and archive tools consume. Turning a
+NUP into an NSP or XCI would mean re-authoring signed NCAs, which this project
+does not do.
 
 ## Why the old SAK failed on some games
 

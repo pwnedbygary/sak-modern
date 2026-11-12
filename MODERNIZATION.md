@@ -166,3 +166,90 @@ unmergeable mismatched update are listed in
 - Full NCA section decryption and CNMT version parsing are not used; versions
   come from filenames and package structure. A future version can read CNMT
   versions directly.
+
+## 8. Switch 2 / NUP (new capability, not recovered)
+
+Nothing in this section comes from the shipped SAK. SAK 0.7.14 predates the
+Switch 2 and knows only NSP/XCI. Switch 2 dumps are a different shape: a
+decrypted game is a plain `exefs/` + `romfs/` folder, and the single-file form is
+**NUP** (NX Package Format).
+
+NUP is an external, published clean-room specification
+([a55uka/nup `SPEC.md`](https://github.com/a55uka/nup), v1.0-draft), so
+`src/sak_modern/core/nup.py` implements that document rather than any recovered
+behaviour. The layout was cross-checked byte for byte against a real 7,283,578,874
+byte container before any code was written:
+
+- superblock `NUP\x01`, header 0x80, TOC at 0x80, `toc_size` 0x1180;
+- the stored TOC SHA-256 matches `SHA-256` over the whole TOC region;
+- `dir_count` 10, `file_count` 41, and the derived children-array length is
+exactly 50 slots with a zero remainder against the string-pool offset;
+- all 41 extents are 16-byte aligned, every file is raw codec, and
+  `sum(sizes) + alignment padding + meta block == file_size`.
+
+The validation loop in `open_nup` enforces the spec's reader rules: magic and
+version, `toc_offset == header_size`, `blob_offset` alignment and
+non-overlap, `file_size` equality, TOC hash, cross-checked package counts,
+bounds-checked string pool and extent ranges, acyclic child graph, and rejection
+of reserved `kind`/`codec` values and unknown superblock flag bits. Node names
+are treated as labels, never as paths: `..`, drive-letter and NUL names are
+refused at extraction time (SPEC.md 6.1.5).
+
+Producer-side choices worth recording:
+
+- The string pool is interned **before** the TOC size is known, because the pool
+  length feeds `toc_size`, which feeds `blob_offset`, which feeds every absolute
+  extent offset. Names are interned in emission order so the later record-write
+  pass hits the cache.
+- Extents are deduplicated by `(sha256, size, codec)` across all packages, so a
+  base game and its update share unchanged files, and a re-bundle does not grow
+  by the size of the old update.
+- Files inherited from an existing `.nup` keep their stored extent and are copied
+  verbatim, with the SHA-256 re-verified during the copy; they are never
+  decompressed and recompressed.
+- `zstd` (codec 1) is supported by the reader and available for the writer
+  through an optional extra. Files above `memory_cap` stay raw, which is
+  conformant because the codec is a per-file field (SPEC.md 4.1).
+- Switch 2 NPDMs moved the program ID from `ACI0 + 0x00` to `ACI0 + 0x10`; both
+  offsets are tried and validated against the title-ID shape (top byte
+  0x01/0x04/0x05 and low three nibbles zero), so a bad read yields 0 rather than
+  a plausible wrong title ID.
+
+A folder round trip is byte-identical: `folder -> NUP -> folder -> NUP` produces
+the same container bytes, which is asserted in the test suite.
+
+### 8.1 Hardening from independent review
+
+An independent adversarial review of the first snapshot returned
+`NEEDS CHANGES`; every finding was reproduced and fixed:
+
+- **Add-on content was lost silently.** Packages were keyed by title ID alone,
+  so `dlc/<title-id>/0` and `dlc/<title-id>/1` collapsed into one and a user's
+  files disappeared with exit status 0. Packages are now keyed by
+  `(title_id, ordinal)` where `ordinal` comes from the index folder, and
+  `build_nup` refuses two packages that would occupy the same slot instead of
+  dropping one.
+- **`toc_size` was allocated before being bounded**, so a hostile container
+  produced `MemoryError`. The TOC and `blob_offset` are now bounded against the
+  real file length before the read.
+- **`string_pool_off < children_offset` was only a warning**, which made the slot
+  count negative and raised `struct.error`. It is now an error.
+- **`iter_tree` had no depth limit**; a 1000-deep chain raised `RecursionError`.
+  Nesting is capped at 256 levels with a `NupError`.
+- **Non-UTF-8 file names** escaped as a `UnicodeEncodeError` traceback; they now
+  raise `NupError` naming the file.
+- **`header_version` was never checked**; 0 is now rejected and a newer version
+  is reported as a warning with fields past 0x80 ignored, per SPEC.md 2.
+- **A zero-length file's SHA-256 was never verified.** `verify_nup` now compares
+  it against the hash of empty content.
+- **Partially overlapping extents were undetected.** `verify_nup` sorts extents
+  and reports any overlap that is not an identical dedup span.
+- **`C:evil` was accepted** as a node name because only a trailing colon was
+  refused; any colon is now refused, since Windows joins a drive-relative name
+  by discarding the output directory.
+- **`--version` was shadowed** by a display version parsed from the folder name;
+  an explicit override now wins.
+
+Two behaviours are documented rather than changed: empty directories are not
+represented (the container stores files), and `--compression zstd` retains every
+compressed payload until the final write.
